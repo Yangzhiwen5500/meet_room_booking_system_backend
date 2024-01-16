@@ -12,6 +12,8 @@ import { RegisterUserDto } from './dto/registerUser.dto';
 import { LoginUserDto } from './dto/loginUser.dto';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
+import { RequireLogin, UserInfo } from 'src/decorator/custom.decorator';
+import { UserDetailVo } from './vo/user-detail.vo';
 
 @Controller('user')
 export class UserController {
@@ -164,5 +166,22 @@ export class UserController {
     } catch (e) {
       throw new UnauthorizedException('token 已失效，请重新登录');
     }
+  }
+
+  @Get('info')
+  @RequireLogin()
+  async info(@UserInfo('userId') userId: number) {
+    const user = await this.userService.findUserDetailById(userId);
+    const vo = new UserDetailVo();
+    vo.id = user.id;
+    vo.nickName = user.nickName;
+    vo.createTime = user.createTime;
+    vo.email = user.email;
+    vo.headPic = user.headPic;
+    vo.isFrozen = user.isFrozen;
+    vo.phoneNumber = user.phoneNumber;
+    vo.username = user.username;
+
+    return vo;
   }
 }
