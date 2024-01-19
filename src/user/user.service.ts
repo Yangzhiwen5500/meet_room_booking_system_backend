@@ -12,9 +12,11 @@ import { Role } from './entities/role.entity';
 import { Permission } from './entities/permission.entity';
 import { md5 } from 'src/utils';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { Like, Repository } from 'typeorm';
 import { LoginUserDto } from './dto/loginUser.dto';
 import { LoginUserVo } from './vo/login-user.vo';
+import { UpdateUserPasswordDto } from './dto/update-user-password.dto';
+import { UpdateUserDto } from './dto/update-user.dto';
 
 @Injectable()
 export class UserService {
@@ -125,6 +127,7 @@ export class UserService {
       id: user.id,
       username: user.username,
       isAdmin: user.isAdmin,
+      email: user.email,
       roles: user.roles.map((item) => item.name),
       permissions: user.roles.reduce((arr, item) => {
         item.permissions.forEach((permission) => {
@@ -145,6 +148,80 @@ export class UserService {
     });
 
     return user;
+  }
+
+  async updatePassword(passwordDto: UpdateUserPasswordDto) {
+    const captcha = await this.redisService.get(
+      `update_password_captcha_${passwordDto.email}`,
+    );
+
+    console.log(`update_password_captcha_${passwordDto.email}`, captcha);
+
+    if (!captcha) {
+      throw new HttpException('captcha expired', HttpStatus.BAD_REQUEST);
+    }
+
+    if (captcha !== passwordDto.captcha) {
+      throw new HttpException('captcha wrong', HttpStatus.BAD_REQUEST);
+    }
+
+    const foundUser = await this.userRepository.findOne({
+      where: {
+        username: passwordDto.username,
+      },
+    });
+
+    if (foundUser.email !== passwordDto.email) {
+      throw new HttpException('Email is not correct', HttpStatus.BAD_REQUEST);
+    }
+    foundUser.password = md5(passwordDto.password);
+    try {
+      await this.userRepository.save(foundUser);
+      return 'password save success';
+    } catch (e) {
+      this.logger.error(e);
+      return 'password save failed';
+    }
+  }
+
+  async update(userId: number, updateUserDto: UpdateUserDto) {
+    const captcha = await this.redisService.get(
+      `update_user_captcha_${updateUserDto.email}`,
+    );
+
+    if (!captcha) {
+      throw new HttpException('captcha expired', HttpStatus.BAD_REQUEST);
+    }
+
+    if (captcha !== updateUserDto.captcha) {
+      throw new HttpException('captcha wrong', HttpStatus.BAD_REQUEST);
+    }
+
+    const foundUser = await this.userRepository.findOne({
+      where: {
+        id: userId,
+      },
+    });
+    if (updateUserDto.nickName) {
+      foundUser.nickName = updateUserDto.nickName;
+    }
+    if (updateUserDto.headPic) {
+      foundUser.headPic = updateUserDto.headPic;
+    }
+
+    try {
+      await this.userRepository.save(foundUser);
+      return 'update user info success';
+    } catch (e) {
+      this.logger.error(e, UserService);
+      return 'update user info failed';
+    }
+  }
+
+  async freezeById(id: number) {
+    const user = await this.userRepository.findOneBy({ id });
+    user.isFrozen = true;
+    await this.userRepository.save(user);
   }
 
   async initData() {
@@ -185,5 +262,40 @@ export class UserService {
     await this.permissionRepository.save([permission1, permission2]);
     await this.roleRepository.save([role1, role2]);
     await this.userRepository.save([user1, user2]);
+  }
+
+  async findUsers(username, nickName, email, pageNo, pageSize) {
+    const skipCount = (pageNo - 1) * pageSize;
+    const condition: Record<string, any> = {};
+    if (username) {
+      condition.username = Like(`%${username}%`);
+    }
+    if (nickName) {
+      condition.nickName = Like(`%${nickName}%`);
+    }
+    if (email) {
+      condition.email = Like(`%${email}%`);
+    }
+
+    const [users, total] = await this.userRepository.findAndCount({
+      select: [
+        'id',
+        'username',
+        'nickName',
+        'email',
+        'phoneNumber',
+        'isFrozen',
+        'headPic',
+        'createTime',
+      ],
+      skip: skipCount,
+      take: pageSize,
+      where: condition,
+    });
+
+    return {
+      users,
+      total,
+    };
   }
 }

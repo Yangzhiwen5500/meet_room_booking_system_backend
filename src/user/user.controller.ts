@@ -1,8 +1,10 @@
 import {
   Body,
   Controller,
+  DefaultValuePipe,
   Get,
   Inject,
+  ParseIntPipe,
   Post,
   Query,
   UnauthorizedException,
@@ -14,6 +16,11 @@ import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import { RequireLogin, UserInfo } from 'src/decorator/custom.decorator';
 import { UserDetailVo } from './vo/user-detail.vo';
+import { UpdateUserPasswordDto } from './dto/update-user-password.dto';
+import { UpdateUserDto } from './dto/update-user.dto';
+
+import { RedisService } from 'src/redis/redis.service';
+import { EmailService } from 'src/email/email.service';
 
 @Controller('user')
 export class UserController {
@@ -22,6 +29,12 @@ export class UserController {
 
   @Inject(JwtService)
   private jwtService: JwtService;
+
+  @Inject(EmailService)
+  private emailService: EmailService;
+
+  @Inject(RedisService)
+  private redisService: RedisService;
 
   constructor(private readonly userService: UserService) {}
 
@@ -44,6 +57,7 @@ export class UserController {
       {
         userId: vo.userInfo.id,
         username: vo.userInfo.username,
+        email: vo.userInfo.email,
         roles: vo.userInfo.roles,
         permissions: vo.userInfo.permissions,
       },
@@ -72,6 +86,7 @@ export class UserController {
     const payload = {
       userId: vo.userInfo.id,
       username: vo.userInfo.username,
+      email: vo.userInfo.email,
       roles: vo.userInfo.roles,
       permissions: vo.userInfo.permissions,
     };
@@ -105,6 +120,7 @@ export class UserController {
       const payload = {
         userId: user.id,
         username: user.username,
+        email: user.email,
         roles: user.roles,
         permissions: user.permissions,
       };
@@ -183,5 +199,87 @@ export class UserController {
     vo.username = user.username;
 
     return vo;
+  }
+
+  @Post(['update_password', 'admin/update_password'])
+  // @RequireLogin()
+  async updatePassword(@Body() passwordDto: UpdateUserPasswordDto) {
+    return await this.userService.updatePassword(passwordDto);
+  }
+
+  @Post(['update', 'admin/update'])
+  @RequireLogin()
+  async updateUserInfo(
+    @UserInfo('userId') userId: number,
+    @Body() updateUserDto: UpdateUserDto,
+  ) {
+    return await this.userService.update(userId, updateUserDto);
+  }
+
+  @Get('freeze')
+  async freeze(@Query('id') userId: number) {
+    return await this.userService.freezeById(userId);
+  }
+
+  @Get('list')
+  async list(
+    @Query('pageNo', new DefaultValuePipe(1), ParseIntPipe) pageNo: number,
+    @Query('pageSize', new DefaultValuePipe(2), ParseIntPipe) pageSize: number,
+    @Query('username') username: string,
+    @Query('nickName') nickName: string,
+    @Query('email') email: string,
+  ) {
+    return await this.userService.findUsers(
+      username,
+      nickName,
+      email,
+      pageNo,
+      pageSize,
+    );
+  }
+
+  @Get('register-captcha')
+  async captcha(@Query('address') address: string) {
+    const code = Math.random().toString().slice(2, 8);
+    await this.emailService.sendMail({
+      to: address,
+      subject: '注册验证码',
+      html: `<p>您的注册验证码是 ${code}</p>`,
+    });
+
+    await this.redisService.set(`captcha_${address}`, code, 5 * 60);
+    return '发送成功';
+  }
+
+  @Get('update_password/captcha')
+  async updatePasswordCaptcha(@Query('address') address: string) {
+    const code = Math.random().toString().slice(2, 8);
+    await this.emailService.sendMail({
+      to: address,
+      subject: '更改密码验证码',
+      html: `<p>您的更改密码验证码是 ${code}</p>`,
+    });
+
+    await this.redisService.set(
+      `update_password_captcha_${address}`,
+      code,
+      5 * 60,
+    );
+    return '发送成功';
+  }
+
+  @RequireLogin()
+  @Get('update/captcha')
+  async updateCaptcha(@UserInfo('email') address: string) {
+    const code = Math.random().toString().slice(2, 8);
+
+    await this.emailService.sendMail({
+      to: address,
+      subject: '更改用户信息',
+      html: `<p>您的更改信息验证码是 ${code}</p>`,
+    });
+    await this.redisService.set(`update_user_captcha_${address}`, code, 5 * 60);
+
+    return '发送成功';
   }
 }
